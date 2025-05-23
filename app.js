@@ -323,67 +323,78 @@ async function getUserIdFromOrder(order) {
 }
 
 // =====================================
-// Notion保存
+// Notion保存（デバッグ版）
 // =====================================
 async function saveToNotion(data) {
   try {
+    console.log('Notion保存開始...');
+    console.log('データベースID:', process.env.NOTION_DATABASE_ID);
+    console.log('保存データ:', data);
+    
+    const properties = {
+      'ID': { 
+        title: [{ 
+          text: { 
+            content: `${new Date().toLocaleString('ja-JP')} - ${data.userName}` 
+          } 
+        }] 
+      },
+      '顧客名': { 
+        rich_text: [{ 
+          text: { content: data.userName } 
+        }] 
+      },
+      '顧客LINE_ID': { 
+        rich_text: [{ 
+          text: { content: data.userId } 
+        }] 
+      },
+      '問い合わせ': { 
+        rich_text: [{ 
+          text: { content: data.userMessage } 
+        }] 
+      },
+      '作成文章': { 
+        rich_text: [{ 
+          text: { content: data.aiReply } 
+        }] 
+      },
+      '注文番号': { 
+        rich_text: [{ 
+          text: { content: data.orderNumber || '' } 
+        }] 
+      },
+      'ステータス': { 
+        rich_text: [{ 
+          text: { content: '対応済み' } 
+        }] 
+      },
+      'プラットフォーム': { 
+        rich_text: [{ 
+          text: { content: 'LINE' } 
+        }] 
+      },
+      '作成日時': { 
+        rich_text: [{ 
+          text: { content: new Date().toLocaleString('ja-JP') } 
+        }] 
+      }
+    };
+    
+    console.log('送信プロパティ:', JSON.stringify(properties, null, 2));
+    
     await notion.pages.create({
       parent: { database_id: process.env.NOTION_DATABASE_ID },
-      properties: {
-        // Notionのメインタイトル（最初の列）
-        'ID': { 
-          title: [{ 
-            text: { 
-              content: `${new Date().toLocaleString('ja-JP')} - ${data.userName}` 
-            } 
-          }] 
-        },
-        '顧客名': { 
-          rich_text: [{ 
-            text: { content: data.userName } 
-          }] 
-        },
-        '顧客LINE_ID': { 
-          rich_text: [{ 
-            text: { content: data.userId } 
-          }] 
-        },
-        '問い合わせ': { 
-          rich_text: [{ 
-            text: { content: data.userMessage } 
-          }] 
-        },
-        '作成文章': { 
-          rich_text: [{ 
-            text: { content: data.aiReply } 
-          }] 
-        },
-        '注文番号': { 
-          rich_text: [{ 
-            text: { content: data.orderNumber || '' } 
-          }] 
-        },
-        'ステータス': { 
-          rich_text: [{ 
-            text: { content: '対応済み' } 
-          }] 
-        },
-        'プラットフォーム': { 
-          rich_text: [{ 
-            text: { content: 'LINE' } 
-          }] 
-        },
-        '作成日時': { 
-          rich_text: [{ 
-            text: { content: new Date().toLocaleString('ja-JP') } 
-          }] 
-        }
-      }
+      properties: properties
     });
+    
     console.log('Notionに保存しました');
   } catch (error) {
-    console.error('Notion保存エラー:', error.response?.data || error);
-    // エラーが出てもLINEの応答は続行
+    console.error('Notion保存エラー詳細:', {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status
+    });
   }
 }
 
