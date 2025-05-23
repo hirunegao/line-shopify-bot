@@ -323,7 +323,7 @@ async function getUserIdFromOrder(order) {
 }
 
 // =====================================
-// Notion保存（デバッグ版）
+// Notion保存（修正版）
 // =====================================
 async function saveToNotion(data) {
   try {
@@ -340,7 +340,7 @@ async function saveToNotion(data) {
         }] 
       },
       '顧客名': { 
-        rich_text: [{ 
+        title: [{  // rich_text → title に変更
           text: { content: data.userName } 
         }] 
       },
@@ -360,19 +360,13 @@ async function saveToNotion(data) {
         }] 
       },
       '注文番号': { 
-        rich_text: [{ 
-          text: { content: data.orderNumber || '' } 
-        }] 
+        number: data.orderNumber ? parseInt(data.orderNumber) : null  // rich_text → number に変更
       },
       'ステータス': { 
-        rich_text: [{ 
-          text: { content: '対応済み' } 
-        }] 
+        multi_select: [{ name: '対応済み' }]  // rich_text → multi_select に変更
       },
       'プラットフォーム': { 
-        rich_text: [{ 
-          text: { content: 'LINE' } 
-        }] 
+        multi_select: [{ name: 'LINE' }]  // rich_text → multi_select に変更
       },
       '作成日時': { 
         rich_text: [{ 
@@ -395,6 +389,41 @@ async function saveToNotion(data) {
       response: error.response?.data,
       status: error.response?.status
     });
+  }
+}
+
+// ChatGPT応答生成（簡易版）- OpenAIクレジット問題の一時的解決
+async function generateAIResponse(message, userId) {
+  try {
+    // 注文番号が含まれている場合
+    const orderNumber = extractOrderNumber(message);
+    if (orderNumber) {
+      return `注文番号 #${orderNumber} について確認いたします。少々お待ちください。`;
+    }
+    
+    // 簡単な応答パターン
+    const responses = {
+      'こんにちは': 'こんにちは！いつもご利用ありがとうございます😊 本日はどのようなご用件でしょうか？',
+      'ありがとう': 'こちらこそありがとうございます！他にご不明な点がございましたらお気軽にお申し付けください。',
+      '営業時間': '営業時間は平日9:00-18:00です。土日祝日はお休みをいただいております。',
+      '送料': '送料は全国一律500円です。5,000円以上のご購入で送料無料となります！',
+      '返品': '商品到着後7日以内でしたら返品を承っております。詳しくは返品ポリシーをご確認ください。',
+      '在庫': '在庫確認をご希望の商品名を教えていただけますか？確認させていただきます。'
+    };
+    
+    // キーワードマッチング
+    for (const [keyword, response] of Object.entries(responses)) {
+      if (message.includes(keyword)) {
+        return response;
+      }
+    }
+    
+    // デフォルト応答
+    return 'お問い合わせありがとうございます。内容を確認の上、担当者よりご連絡させていただきます。';
+    
+  } catch (error) {
+    console.error('応答生成エラー:', error);
+    return '申し訳ございません。エラーが発生しました。しばらくしてからお試しください。';
   }
 }
 
