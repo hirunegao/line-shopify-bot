@@ -327,20 +327,20 @@ async function getUserIdFromOrder(order) {
 // =====================================
 async function saveToNotion(data) {
   try {
-    // まず、データベースのプロパティを取得して確認
-    const databaseId = process.env.NOTION_DATABASE_ID;
-    const response = await notion.databases.retrieve({ database_id: databaseId });
-    console.log('Notionデータベースのプロパティ:', Object.keys(response.properties));
-    
     await notion.pages.create({
-      parent: { database_id: databaseId },
+      parent: { database_id: process.env.NOTION_DATABASE_ID },
       properties: {
-        // タイトルプロパティ（最初の列）
-        'title': { 
+        // Notionのメインタイトル（最初の列）
+        'ID': { 
           title: [{ 
             text: { 
               content: `${new Date().toLocaleString('ja-JP')} - ${data.userName}` 
             } 
+          }] 
+        },
+        '顧客名': { 
+          rich_text: [{ 
+            text: { content: data.userName } 
           }] 
         },
         '顧客LINE_ID': { 
@@ -348,26 +348,35 @@ async function saveToNotion(data) {
             text: { content: data.userId } 
           }] 
         },
-        '顧客名': { 
-          title: [{ 
-            text: { content: data.userName } 
-          }] 
-        },
         '問い合わせ': { 
           rich_text: [{ 
             text: { content: data.userMessage } 
           }] 
         },
-        'AI回答': { 
+        '作成文章': { 
           rich_text: [{ 
             text: { content: data.aiReply } 
           }] 
         },
         '注文番号': { 
-          number: data.orderNumber ? parseInt(data.orderNumber) : null
+          rich_text: [{ 
+            text: { content: data.orderNumber || '' } 
+          }] 
         },
         'ステータス': { 
-          multi_select: [{ name: '完了' }]
+          rich_text: [{ 
+            text: { content: '対応済み' } 
+          }] 
+        },
+        'プラットフォーム': { 
+          rich_text: [{ 
+            text: { content: 'LINE' } 
+          }] 
+        },
+        '作成日時': { 
+          rich_text: [{ 
+            text: { content: new Date().toLocaleString('ja-JP') } 
+          }] 
         }
       }
     });
