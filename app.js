@@ -327,10 +327,16 @@ async function getUserIdFromOrder(order) {
 // =====================================
 async function saveToNotion(data) {
   try {
+    // まず、データベースのプロパティを取得して確認
+    const databaseId = process.env.NOTION_DATABASE_ID;
+    const response = await notion.databases.retrieve({ database_id: databaseId });
+    console.log('Notionデータベースのプロパティ:', Object.keys(response.properties));
+    
     await notion.pages.create({
-      parent: { database_id: process.env.NOTION_DATABASE_ID },
+      parent: { database_id: databaseId },
       properties: {
-        'タイトル': { 
+        // タイトルプロパティ（最初の列）
+        'title': { 
           title: [{ 
             text: { 
               content: `${new Date().toLocaleString('ja-JP')} - ${data.userName}` 
@@ -343,7 +349,7 @@ async function saveToNotion(data) {
           }] 
         },
         '顧客名': { 
-          rich_text: [{ 
+          title: [{ 
             text: { content: data.userName } 
           }] 
         },
@@ -358,18 +364,17 @@ async function saveToNotion(data) {
           }] 
         },
         '注文番号': { 
-          rich_text: [{ 
-            text: { content: data.orderNumber || '' } 
-          }] 
+          number: data.orderNumber ? parseInt(data.orderNumber) : null
         },
         'ステータス': { 
-          select: { name: '完了' } 
+          multi_select: [{ name: '完了' }]
         }
       }
     });
     console.log('Notionに保存しました');
   } catch (error) {
-    console.error('Notion保存エラー:', error);
+    console.error('Notion保存エラー:', error.response?.data || error);
+    // エラーが出てもLINEの応答は続行
   }
 }
 
