@@ -504,60 +504,133 @@ ${context.possibleOrders.map((order, index) =>
       }
     }
     
-    // 通常のChatGPT応答生成
+    // 注文番号がある場合の処理
+    if (context.orderInfo) {
+      return formatOrderStatusMessage(context.orderInfo);
+    }
+    
+    // カテゴリー別の応答を生成
+    const categoryResponses = {
+      '配送・発送': () => {
+        if (!context.orderNumber) {
+          return `発送状況を確認させていただきます📦
+
+ご注文番号、またはご注文時のお名前を教えていただけますでしょうか？`;
+        }
+        return `注文番号 #${context.orderNumber} の配送状況を確認いたします。少々お待ちください。`;
+      },
+      
+      '在庫': () => {
+        return `在庫確認を承りました。
+
+どちらの商品の在庫をお調べいたしましょうか？
+商品名またはURLを教えていただけますでしょうか。`;
+      },
+      
+      '営業・その他': () => {
+        const businessInfo = `【営業時間のご案内】
+平日：9:00-18:00
+土日祝：お休み
+
+お電話でのお問い合わせ：
+03-1234-5678
+
+メールでのお問い合わせ：
+support@hirunegao.com
+
+お急ぎの場合は、お電話でのお問い合わせをお勧めいたします。`;
+        
+        if (message.includes('営業時間')) {
+          return businessInfo;
+        }
+        
+        // 一般的な挨拶への応答
+        if (message.match(/こんにち[はわ]|おはよう|こんばん[はわ]|はじめまして/)) {
+          return `こんにちは！昼寝のソムリエshop HIRUNEGAOです😊
+
+本日はどのようなご用件でしょうか？
+・ご注文の確認
+・商品について
+・発送状況の確認
+・その他のお問い合わせ
+
+お気軽にお申し付けください。`;
+        }
+        
+        return businessInfo;
+      },
+      
+      'キャンセル・返品': () => {
+        return `キャンセル・返品についてのお問い合わせですね。
+
+大変恐れ入りますが、キャンセル・返品については担当者が詳細を確認させていただく必要がございます。
+
+以下の情報を教えていただけますでしょうか：
+・ご注文番号
+・キャンセル/返品の理由
+
+担当者より1営業日以内にご連絡させていただきます。`;
+      },
+      
+      '支払い': () => {
+        return `お支払いについてのご案内です💳
+
+【ご利用可能な決済方法】
+・クレジットカード（VISA/Master/JCB/AMEX）
+・銀行振込
+・代金引換（手数料330円）
+・コンビニ決済
+
+お支払いに関してご不明な点がございましたら、詳しくお聞かせください。`;
+      },
+      
+      '商品': () => {
+        return `商品についてのお問い合わせありがとうございます。
+
+どちらの商品についてお知りになりたいでしょうか？
+・商品名
+・サイズや仕様
+・価格
+・在庫状況
+
+具体的な商品名を教えていただければ、詳しくご案内させていただきます。`;
+      }
+    };
+    
+    // カテゴリーに応じた応答を取得
+    if (categoryResponses[context.category]) {
+      const response = categoryResponses[context.category]();
+      
+      // 顧客履歴がある場合は追加情報
+      if (context.customerHistory && context.customerHistory.length > 0) {
+        return response + `\n\n※過去にもお問い合わせいただいているお客様ですね。いつもご利用ありがとうございます。`;
+      }
+      
+      return response;
+    }
+    
+    // 通常のChatGPT応答（テンプレートとコンテキストを活用）
     let systemPrompt = `あなたは「昼寝のソムリエshop HIRUNEGAO」の親切で丁寧なカスタマーサポートAIです。
 
+重要：必ず具体的で役立つ情報を提供してください。「担当者より連絡」という回答は最終手段です。
+
 基本ルール：
-- 丁寧で親しみやすい言葉遣い
-- 適度に絵文字を使用（1-2個程度）
-- 簡潔でわかりやすい説明
-- 不明な点は素直に認め、確認することを伝える
-- お客様の気持ちに寄り添う対応
+1. まず、お客様の質問に直接答えられるか判断する
+2. 答えられる場合は、具体的な情報を提供する
+3. 情報が不足している場合は、必要な情報を聞く
+4. 本当に回答できない場合のみ「担当者確認」とする
+
+対応例：
+- 「送料は？」→ 具体的な送料を案内
+- 「返品したい」→ 返品ポリシーを説明し、必要な情報を聞く
+- 「在庫ある？」→ どの商品か聞く
+- 「いつ届く？」→ 注文番号か名前を聞く
 
 利用可能なテンプレート：
 ${JSON.stringify(templates, null, 2)}
-`;
-    
-    // コンテキスト情報を追加
-    if (context.orderInfo) {
-      systemPrompt += `
 
-注文情報：
-- 注文番号: #${context.orderInfo.orderNumber}
-- 注文日: ${new Date(context.orderInfo.createdAt).toLocaleDateString('ja-JP')}
-- 合計金額: ¥${context.orderInfo.totalPrice}
-- 配送状況: ${getStatusInJapanese(context.orderInfo.fulfillmentStatus)}
+カテゴリー: ${context.category}
 `;
-      
-      if (context.orderInfo.trackingInfo.length > 0) {
-        const tracking = context.orderInfo.trackingInfo[0];
-        systemPrompt += `- 追跡番号: ${tracking.trackingNumber || '準備中'}
-- 配送業者: ${tracking.trackingCompany || '確認中'}
-`;
-      }
-      
-      systemPrompt += `
-商品明細：
-${context.orderInfo.items.map(item => 
-  `- ${item.name} × ${item.quantity}個 (¥${item.price})`
-).join('\n')}
-`;
-    }
-    
-    if (context.customerHistory && context.customerHistory.length > 0) {
-      systemPrompt += `
-
-過去の問い合わせ履歴あり（${context.customerHistory.length}件）
-`;
-    }
-    
-    if (context.requiresHumanReview) {
-      systemPrompt += `
-
-注意：このお客様は人間のスタッフによる対応が必要な可能性があります。
-慎重に対応し、必要に応じて「担当者に確認いたします」と伝えてください。
-`;
-    }
     
     // ChatGPT APIを呼び出し
     const completion = await openai.chat.completions.create({
@@ -569,7 +642,7 @@ ${context.orderInfo.items.map(item =>
         },
         {
           role: "user",
-          content: `カテゴリー: ${context.category}\nお客様のメッセージ: ${message}`
+          content: message
         }
       ],
       temperature: 0.7,
@@ -577,6 +650,20 @@ ${context.orderInfo.items.map(item =>
     });
     
     let response = completion.choices[0].message.content;
+    
+    // デフォルト応答を避ける
+    if (response.includes('担当者よりご連絡') && !context.requiresHumanReview) {
+      // 代わりに役立つ情報を提供
+      response = `ご質問ありがとうございます。
+
+もう少し詳しくお聞かせいただけますでしょうか？
+例えば：
+・ご注文について → 注文番号をお教えください
+・商品について → 商品名をお教えください
+・配送について → いつ頃のご注文でしょうか
+
+お客様のご要望に合わせてご案内させていただきます😊`;
+    }
     
     // 人間の確認が必要な場合は注記を追加
     if (context.requiresHumanReview) {
@@ -586,14 +673,20 @@ ${context.orderInfo.items.map(item =>
     return response;
     
   } catch (error) {
-    console.error('ChatGPT エラー:', error);
+    console.error('応答生成エラー:', error);
     
-    // エラー時の代替応答
-    if (context.orderNumber && context.orderInfo) {
-      return formatOrderStatusMessage(context.orderInfo);
-    }
+    // エラー時でも役立つ応答を返す
+    const fallbackResponses = {
+      '配送・発送': '発送状況の確認には注文番号が必要です。注文番号をお教えいただけますでしょうか？',
+      '在庫': '在庫確認をいたします。商品名を教えていただけますでしょうか？',
+      '営業・その他': `営業時間：平日9:00-18:00\nお電話：03-1234-5678\nメール：support@hirunegao.com`,
+      'キャンセル・返品': '返品は商品到着後7日以内に承っております。注文番号と理由をお教えください。',
+      '支払い': 'クレジットカード、銀行振込、代引き、コンビニ決済がご利用いただけます。',
+      '商品': 'どちらの商品についてお知りになりたいでしょうか？'
+    };
     
-    return 'お問い合わせありがとうございます。内容を確認の上、担当者よりご連絡させていただきます。';
+    return fallbackResponses[context.category] || 
+           'お問い合わせありがとうございます。もう少し詳しくお聞かせいただけますでしょうか？';
   }
 }
 
