@@ -66,8 +66,9 @@ async function handleEvent(event) {
     console.log('プロフィール取得エラー:', error);
   }
   
-  // メッセージを分析してコンテキストを準備
+  // メッセージを分析してコンテキストを準備（userIdを追加）
   const context = await analyzeMessage(userMessage, userId);
+  context.userId = userId; // userIdをcontextに追加
   
   // ChatGPTで返答を生成
   let replyMessage = await generateAIResponse(userMessage, context);
@@ -104,8 +105,15 @@ async function analyzeMessage(message, userId) {
     orderInfo: null,
     category: null,
     requiresHumanReview: false,
-    customerHistory: null
+    customerHistory: null,
+    customerName: null,
+    possibleOrders: null,
+    conversationState: null
   };
+  
+  // 顧客履歴を取得（会話の状態も確認）
+  context.customerHistory = await getCustomerHistory(userId);
+  context.conversationState = await getConversationState(userId);
   
   // 注文番号の抽出（複数パターンに対応）
   const orderPatterns = [
@@ -123,21 +131,99 @@ async function analyzeMessage(message, userId) {
     }
   }
   
+  // 名前の抽出を試みる
+  context.customerName = extractCustomerName(message);
+  
   // 注文情報を取得
   if (context.orderNumber) {
     context.orderInfo = await getOrderDetails(context.orderNumber);
+  } else if (context.customerName) {
+    // 名前から注文を検索
+    context.possibleOrders = await searchOrdersByCustomerName(context.customerName);
   }
   
   // カテゴリー分類
   context.category = categorizeMessage(message);
   
-  // 顧客履歴を取得
-  context.customerHistory = await getCustomerHistory(userId);
-  
   // 人間の確認が必要か判定
   context.requiresHumanReview = shouldEscalateToHuman(message, context);
   
   return context;
+}
+
+// 会話の状態を管理
+const conversationStates = new Map();
+
+async function getConversationState(userId) {
+  return conversationStates.get(userId) || { stage: 'initial' };
+}
+
+async function updateConversationState(userId, state) {
+  conversationStates.set(userId, { ...state, updatedAt: new Date() });
+  
+  // 30分後に自動クリア
+  setTimeout(() => {
+    conversationStates.delete(userId);
+  }, 30 * 60 * 1000);
+}
+
+// 名前を抽出する関数
+function extractCustomerName(message) {
+  // 「〇〇です」「〇〇と申します」などのパターン
+  const namePatterns = [
+    /私?は?(.{2,10})(?:です|と申します|といいます)/,
+    /名前は(.{2,10})(?:です|と申します)/,
+    /(.{2,10})(?:です|と申します|といいます)$/
+  ];
+  
+  for (const pattern of namePatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+  
+  // 単独の名前（2-4文字の漢字・ひらがな・カタカナ）
+  if (/^[ぁ-んァ-ヶー一-龯]{2,4}$/.test(message.trim())) {
+    return message.trim();
+  }
+  
+  return null;
+}
+
+// 名前から注文を検索
+async function searchOrdersByCustomerName(customerName) {
+  try {
+    // 名前の部分一致で検索（姓または名で検索）
+    const searchQueries = [
+      customerName,
+      customerName.slice(0, -1), // 名前の最後の1文字を除く（「様」などを考慮）
+      customerName.slice(1)       // 名前の最初の1文字を除く
+    ];
+    
+    const allOrders = [];
+    
+    for (const query of searchQueries) {
+      const response = await shopifyAxios.get(`/customers/search.json?query=${encodeURIComponent(query)}`);
+      
+      for (const customer of response.data.customers) {
+        // 顧客の注文を取得
+        const ordersResponse = await shopifyAxios.get(`/orders.json?customer_id=${customer.id}&status=any&limit=10`);
+        allOrders.push(...ordersResponse.data.orders);
+      }
+    }
+    
+    // 重複を除去して最新の注文順にソート
+    const uniqueOrders = Array.from(
+      new Map(allOrders.map(order => [order.id, order])).values()
+    ).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    
+    return uniqueOrders.slice(0, 5); // 最新5件まで
+    
+  } catch (error) {
+    console.error('顧客名での注文検索エラー:', error);
+    return [];
+  }
 }
 
 // メッセージのカテゴリー分類
@@ -336,10 +422,89 @@ function getDefaultTemplates() {
 // =====================================
 async function generateAIResponse(message, context) {
   try {
+    // 会話の状態を取得
+    const conversationState = await getConversationState(context.userId);
+    
     // テンプレートを読み込み
     const templates = await loadResponseTemplates();
     
-    // システムプロンプトを構築
+    // 発送状況の問い合わせで注文番号がない場合
+    if (context.category === '配送・発送' && !context.orderNumber && !context.orderInfo) {
+      
+      // ステップ1: 名前を聞く
+      if (conversationState.stage === 'initial') {
+        await updateConversationState(context.userId, { 
+          stage: 'waiting_for_name',
+          intent: 'shipping_inquiry'
+        });
+        
+        return `発送状況を確認させていただきます📦
+
+お手数ですが、ご注文時のお名前をフルネームで教えていただけますでしょうか？
+
+（例：山田太郎）`;
+      }
+      
+      // ステップ2: 名前から注文を検索
+      if (conversationState.stage === 'waiting_for_name' && context.customerName) {
+        if (context.possibleOrders && context.possibleOrders.length > 0) {
+          
+          if (context.possibleOrders.length === 1) {
+            // 注文が1件のみの場合
+            const order = context.possibleOrders[0];
+            await updateConversationState(context.userId, { stage: 'initial' });
+            
+            return formatOrderStatusMessage(order);
+          } else {
+            // 複数の注文がある場合
+            await updateConversationState(context.userId, { 
+              stage: 'waiting_for_order_selection',
+              possibleOrders: context.possibleOrders,
+              customerName: context.customerName
+            });
+            
+            return `${context.customerName}様のご注文が複数見つかりました。
+
+どちらの注文についてお調べしましょうか？
+
+${context.possibleOrders.map((order, index) => 
+  `${index + 1}. 注文番号 #${order.order_number}
+   注文日: ${new Date(order.created_at).toLocaleDateString('ja-JP')}
+   商品: ${order.line_items[0].name}${order.line_items.length > 1 ? ` 他${order.line_items.length - 1}点` : ''}`
+).join('\n\n')}
+
+番号でお答えいただくか、注文番号を教えてください。`;
+          }
+        } else {
+          // 注文が見つからない場合
+          await updateConversationState(context.userId, { 
+            stage: 'name_not_found',
+            attemptedName: context.customerName
+          });
+          
+          return `申し訳ございません。${context.customerName}様のお名前でご注文が見つかりませんでした。
+
+以下をご確認いただけますでしょうか：
+・ご注文時と同じお名前（漢字・カナ）でしょうか？
+・最近のご注文でしょうか？
+
+もう一度お名前を教えていただくか、注文番号がお分かりでしたら教えてください。`;
+        }
+      }
+      
+      // ステップ3: 注文選択待ち
+      if (conversationState.stage === 'waiting_for_order_selection') {
+        const selection = parseInt(message.trim());
+        if (selection && conversationState.possibleOrders && conversationState.possibleOrders[selection - 1]) {
+          const selectedOrder = conversationState.possibleOrders[selection - 1];
+          await updateConversationState(context.userId, { stage: 'initial' });
+          
+          return formatOrderStatusMessage(selectedOrder);
+        }
+      }
+    }
+    
+    // 通常のChatGPT応答生成
     let systemPrompt = `あなたは「昼寝のソムリエshop HIRUNEGAO」の親切で丁寧なカスタマーサポートAIです。
 
 基本ルール：
@@ -425,13 +590,52 @@ ${context.orderInfo.items.map(item =>
     
     // エラー時の代替応答
     if (context.orderNumber && context.orderInfo) {
-      return `ご注文番号 #${context.orderNumber} について確認いたしました。
-現在の状況：${getStatusInJapanese(context.orderInfo.fulfillmentStatus)}
-詳細については、担当者より改めてご連絡させていただきます。`;
+      return formatOrderStatusMessage(context.orderInfo);
     }
     
     return 'お問い合わせありがとうございます。内容を確認の上、担当者よりご連絡させていただきます。';
   }
+}
+
+// 注文状況メッセージのフォーマット
+function formatOrderStatusMessage(order) {
+  let message = `📦 発送状況のご確認
+
+【ご注文情報】
+注文番号: #${order.order_number || order.name}
+注文日: ${new Date(order.created_at).toLocaleDateString('ja-JP')}
+お客様名: ${order.customer?.first_name} ${order.customer?.last_name} 様
+
+【配送状況】
+ステータス: ${getStatusInJapanese(order.fulfillment_status)}
+`;
+
+  if (order.fulfillments && order.fulfillments.length > 0) {
+    const fulfillment = order.fulfillments[0];
+    message += `
+【配送詳細】
+配送業者: ${fulfillment.tracking_company || '確認中'}
+追跡番号: ${fulfillment.tracking_number || '準備中'}`;
+    
+    if (fulfillment.tracking_url) {
+      message += `
+追跡URL: ${fulfillment.tracking_url}`;
+    }
+    
+    message += `
+発送日: ${new Date(fulfillment.created_at).toLocaleDateString('ja-JP')}
+お届け予定: 発送から2-3営業日`;
+  } else if (order.fulfillment_status === null) {
+    message += `
+現在、発送準備中です。
+発送が完了しましたら、追跡番号と共にお知らせいたします。`;
+  }
+
+  message += `
+
+ご不明な点がございましたら、お気軽にお問い合わせください😊`;
+
+  return message;
 }
 
 // =====================================
